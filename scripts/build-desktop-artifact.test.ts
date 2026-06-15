@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import {
+  createBuildConfig,
   createStagePnpmConfig,
   resolveDesktopRuntimeDependencies,
   resolveBuildOptions,
@@ -29,6 +30,104 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
   });
+
+  it.effect("generates explicit Windows installer shortcut metadata", () =>
+    Effect.gen(function* () {
+      const buildConfig = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.0.17",
+        false,
+        false,
+        undefined,
+        "C:/stage/app/scripts/after-pack-win-icon.cjs",
+      );
+
+      assert.equal(buildConfig.productName, "T3 Code (Alpha)");
+      assert.equal(buildConfig.afterPack, "C:/stage/app/scripts/after-pack-win-icon.cjs");
+      assert.deepStrictEqual(buildConfig.nsis, {
+        createDesktopShortcut: true,
+        createStartMenuShortcut: true,
+        shortcutName: "T3 Code (Alpha)",
+      });
+      assert.deepStrictEqual(buildConfig.win, {
+        target: ["nsis"],
+        icon: "icon.ico",
+        signAndEditExecutable: false,
+      });
+    }),
+  );
+
+  it.effect("uses nightly branding for Windows installer shortcuts", () =>
+    Effect.gen(function* () {
+      const buildConfig = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.0.17-nightly.20260413.42",
+        false,
+        false,
+        undefined,
+      );
+
+      assert.equal(buildConfig.productName, "T3 Code (Nightly)");
+      assert.deepStrictEqual(buildConfig.nsis, {
+        createDesktopShortcut: true,
+        createStartMenuShortcut: true,
+        shortcutName: "T3 Code (Nightly)",
+      });
+    }),
+  );
+
+  it.effect("generates Linux desktop launcher metadata", () =>
+    Effect.gen(function* () {
+      const buildConfig = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "0.0.17",
+        false,
+        false,
+        undefined,
+      );
+
+      assert.deepStrictEqual(buildConfig.linux, {
+        target: ["AppImage"],
+        executableName: "t3code",
+        icon: "icons",
+        category: "Development",
+        desktop: {
+          entry: {
+            Name: "T3 Code (Alpha)",
+            Comment: "Minimal GUI for coding agents.",
+            Keywords: "T3;Code;Codex;Claude;Cursor;OpenCode;AI;Developer;",
+            Terminal: false,
+            Type: "Application",
+            Categories: "Development;",
+            StartupWMClass: "t3code",
+          },
+        },
+      });
+    }),
+  );
+
+  it.effect("keeps macOS bundle launcher identity metadata", () =>
+    Effect.gen(function* () {
+      const buildConfig = yield* createBuildConfig("mac", "dmg", "0.0.17", false, false, undefined);
+
+      assert.equal(buildConfig.appId, "com.t3tools.t3code");
+      assert.equal(buildConfig.productName, "T3 Code (Alpha)");
+      assert.deepStrictEqual(buildConfig.mac, {
+        target: ["dmg", "zip"],
+        icon: "icon.icns",
+        category: "public.app-category.developer-tools",
+        protocols: [
+          {
+            name: "T3 Code",
+            schemes: ["t3code"],
+          },
+        ],
+      });
+    }),
+  );
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17"), {

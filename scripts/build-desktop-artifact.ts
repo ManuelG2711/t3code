@@ -6,6 +6,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+import { createRequire } from "node:module";
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
@@ -27,6 +28,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
+const require = createRequire(import.meta.url);
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
@@ -579,6 +581,51 @@ function stageWindowsIcons(stageResourcesDir: string, sourceIco: string) {
   });
 }
 
+function resolveRceditX64Path(): string {
+  const rceditEntry = require.resolve("rcedit").replaceAll("\\", "/");
+  const packageRoot = rceditEntry.slice(0, rceditEntry.lastIndexOf("/lib/"));
+  return `${packageRoot}/bin/rcedit-x64.exe`;
+}
+
+const unsignedWindowsIconHookSource = `const { execFileSync } = require("node:child_process");
+const { existsSync } = require("node:fs");
+const path = require("node:path");
+
+module.exports = async function afterPack(context) {
+  if (context.electronPlatformName !== "win32") {
+    return;
+  }
+
+  const productFilename = context.packager.appInfo.productFilename;
+  const exePath = path.join(context.appOutDir, productFilename + ".exe");
+  const projectDir = context.packager.projectDir;
+  const iconPath = path.join(projectDir, "apps", "desktop", "resources", "icon.ico");
+  const rceditPath = path.join(projectDir, "scripts", "rcedit-x64.exe");
+
+  for (const filePath of [exePath, iconPath, rceditPath]) {
+    if (!existsSync(filePath)) {
+      throw new Error("Windows icon hook missing required file: " + filePath);
+    }
+  }
+
+  execFileSync(rceditPath, [exePath, "--set-icon", iconPath], { stdio: "inherit" });
+};
+`;
+
+const stageUnsignedWindowsIconHook = Effect.fn("stageUnsignedWindowsIconHook")(function* (
+  stageAppDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const scriptsDir = path.join(stageAppDir, "scripts");
+  yield* fs.makeDirectory(scriptsDir, { recursive: true });
+  yield* fs.copyFile(resolveRceditX64Path(), path.join(scriptsDir, "rcedit-x64.exe"));
+  yield* fs.writeFileString(
+    path.join(stageAppDir, WINDOWS_ICON_AFTER_PACK_HOOK),
+    unsignedWindowsIconHookSource,
+  );
+});
+
 function validateBundledClientAssets(clientDir: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -690,17 +737,25 @@ export function resolveDesktopProductName(version: string): string {
     : (desktopPackageJson.productName ?? "T3 Code");
 }
 
-const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+const DESKTOP_APP_ID = "com.t3tools.t3code";
+const DESKTOP_EXECUTABLE_NAME = "t3code";
+const DESKTOP_LAUNCHER_COMMENT = "Minimal GUI for coding agents.";
+const DESKTOP_LAUNCHER_KEYWORDS = "T3;Code;Codex;Claude;Cursor;OpenCode;AI;Developer;";
+const WINDOWS_ICON_AFTER_PACK_HOOK = "scripts/after-pack-win-icon.cjs";
+
+export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
   version: string,
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
+  unsignedWindowsIconHookPath = WINDOWS_ICON_AFTER_PACK_HOOK,
 ) {
+  const productName = resolveDesktopProductName(version);
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.t3code",
-    productName: resolveDesktopProductName(version),
+    appId: DESKTOP_APP_ID,
+    productName,
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     directories: {
       buildResources: "apps/desktop/resources",
@@ -736,12 +791,18 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: DESKTOP_EXECUTABLE_NAME,
       icon: "icons",
       category: "Development",
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          Name: productName,
+          Comment: DESKTOP_LAUNCHER_COMMENT,
+          Keywords: DESKTOP_LAUNCHER_KEYWORDS,
+          Terminal: false,
+          Type: "Application",
+          Categories: "Development;",
+          StartupWMClass: DESKTOP_EXECUTABLE_NAME,
         },
       },
     };
@@ -749,6 +810,14 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   if (platform === "win") {
     buildConfig.npmRebuild = false;
+    if (!signed) {
+      buildConfig.afterPack = unsignedWindowsIconHookPath;
+    }
+    buildConfig.nsis = {
+      createDesktopShortcut: true,
+      createStartMenuShortcut: true,
+      shortcutName: productName,
+    };
     const winConfig: Record<string, unknown> = {
       target: [target],
       icon: "icon.ico",
@@ -905,6 +974,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
+  if (options.platform === "win" && !options.signed) {
+    yield* stageUnsignedWindowsIconHook(stageAppDir);
+  }
 
   const stageDependencies = {
     ...resolvedServerDependencies,
@@ -928,6 +1000,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
+      path.join(stageAppDir, WINDOWS_ICON_AFTER_PACK_HOOK),
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -972,6 +1045,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     delete buildEnv.APPLE_API_KEY;
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;
+  }
+  if (options.platform === "win" && !options.signed) {
+    buildEnv.ELECTRON_BUILDER_DISABLE_BUILD_CACHE = "true";
   }
 
   if (hostPlatform === "win32") {

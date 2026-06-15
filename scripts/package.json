@@ -11,6 +11,7 @@
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "effect": "catalog:",
+    "rcedit": "5.0.2",
     "yaml": "catalog:"
   },
   "devDependencies": {
