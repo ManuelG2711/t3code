@@ -195,6 +195,13 @@ export const issueActiveMcpCredential = (
         .pipe(Effect.andThen(activeMcpSessionRegistry.issue(request)))
     : Effect.sync((): McpIssuedCredential | undefined => undefined);
 
+export const resolveActiveMcpCredential = (
+  rawToken: string,
+): Effect.Effect<McpInvocationContext.McpInvocationScope | undefined> =>
+  activeMcpSessionRegistry
+    ? activeMcpSessionRegistry.resolve(rawToken)
+    : Effect.sync((): McpInvocationContext.McpInvocationScope | undefined => undefined);
+
 export const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void;
 
