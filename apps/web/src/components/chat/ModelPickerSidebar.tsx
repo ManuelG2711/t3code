@@ -12,10 +12,20 @@ import type { ProviderInstanceEntry } from "../../providerInstances";
  * kind-based copy but uses the entry's configured `displayName` so custom
  * instances get their user-authored name (e.g. "Codex Personal — Unavailable.").
  */
-function describeUnavailableInstance(entry: ProviderInstanceEntry): string {
+export function describeModelPickerProviderInstanceTooltip(input: {
+  readonly entry: ProviderInstanceEntry;
+  readonly isUnavailable: boolean;
+  readonly isContextDisabled: boolean;
+  readonly isNew: boolean;
+  readonly contextDisabledTooltip?: string | undefined;
+}): string {
+  const { entry } = input;
   const label = entry.displayName;
-  if (entry.status === "ready") {
-    return label;
+  if (!input.isUnavailable) {
+    if (input.isContextDisabled) {
+      return input.contextDisabledTooltip ?? label;
+    }
+    return input.isNew ? `${label} — New` : label;
   }
   const kind =
     entry.status === "error"
@@ -27,6 +37,10 @@ function describeUnavailableInstance(entry: ProviderInstanceEntry): string {
           : "Not ready";
   const msg = entry.snapshot.message?.trim();
   return msg ? `${label} — ${kind}. ${msg}` : `${label} — ${kind}.`;
+}
+
+export function isModelPickerProviderInstanceUnavailable(entry: ProviderInstanceEntry): boolean {
+  return !entry.isAvailable || entry.status !== "ready";
 }
 
 const SELECTED_INDICATOR_CLASS =
@@ -159,7 +173,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
 
           {/* Instance buttons (one per configured instance — built-in + custom) */}
           {props.instanceEntries.map((entry) => {
-            const isUnavailable = !entry.isAvailable || entry.status !== "ready";
+            const isUnavailable = isModelPickerProviderInstanceUnavailable(entry);
             const isContextDisabled = props.disabledInstanceIds?.has(entry.instanceId) ?? false;
             const isDisabled = isUnavailable || isContextDisabled;
             const isSelected = props.selectedInstanceId === entry.instanceId;
@@ -168,13 +182,13 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
             const showInstanceBadge =
               Boolean(entry.accentColor) || (duplicateDriverCounts.get(entry.driverKind) ?? 0) > 1;
 
-            const tooltip = isUnavailable
-              ? describeUnavailableInstance(entry)
-              : isContextDisabled
-                ? (props.getDisabledInstanceTooltip?.(entry) ?? entry.displayName)
-                : showNewBadge
-                  ? `${entry.displayName} — New`
-                  : entry.displayName;
+            const tooltip = describeModelPickerProviderInstanceTooltip({
+              entry,
+              isUnavailable,
+              isContextDisabled,
+              isNew: showNewBadge,
+              contextDisabledTooltip: props.getDisabledInstanceTooltip?.(entry),
+            });
 
             const button = (
               <button

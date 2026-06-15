@@ -1,6 +1,7 @@
 import {
   EventId,
   MessageId,
+  ProviderDriverKind,
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
@@ -18,12 +19,24 @@ import {
   findSidebarProposedPlan,
   hasActionableProposedPlan,
   isLatestTurnSettled,
+  PROVIDER_OPTIONS,
   workEntryIndicatesToolFailure,
   workEntryIndicatesToolNeutralStatus,
   workEntryIndicatesToolSuccess,
 } from "./session-logic";
 
 let nextActivityId = 0;
+
+describe("PROVIDER_OPTIONS", () => {
+  it("offers Pi Agent as an available provider instead of a coming-soon entry", () => {
+    expect(PROVIDER_OPTIONS).toContainEqual({
+      value: ProviderDriverKind.make("piAgent"),
+      label: "Pi Agent",
+      available: true,
+      pickerSidebarBadge: "new",
+    });
+  });
+});
 
 function makeActivity(overrides: {
   id?: string;

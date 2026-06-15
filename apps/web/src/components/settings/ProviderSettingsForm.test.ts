@@ -10,6 +10,19 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
+  it("lists Pi Agent as an available provider driver with its settings fields", () => {
+    const piAgent = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("piAgent")];
+
+    expect(piAgent).toMatchObject({
+      label: "Pi Agent",
+      badgeLabel: "Early Access",
+    });
+    expect(deriveProviderSettingsFields(piAgent!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "launchArgs",
+    ]);
+  });
+
   it("derives visible provider config fields from the client definition schema", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
 

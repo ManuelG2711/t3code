@@ -167,6 +167,12 @@ function createBaseServerConfig(): ServerConfig {
           serverPassword: "",
           customModels: [],
         },
+        piAgent: {
+          enabled: false,
+          binaryPath: "pi-acp",
+          launchArgs: "",
+          customModels: [],
+        },
       },
     },
   };

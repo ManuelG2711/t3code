@@ -61,6 +61,28 @@ const ULTRATHINK_FRAME_CLASSES = {
 } as const;
 
 describe("getComposerProviderState", () => {
+  it("propagates Pi Agent mode-backed reasoning selections for dispatch", () => {
+    const piAgentProvider = ProviderDriverKind.make("piAgent");
+    const state = getComposerProviderState({
+      provider: piAgentProvider,
+      model: MODEL,
+      models: modelWith([
+        selectDescriptor("piAgentMode", [
+          { id: "balanced", label: "Balanced", isDefault: true },
+          { id: "deep", label: "Deep" },
+        ]),
+      ]),
+      prompt: "",
+      modelOptions: selections(["piAgentMode", "deep"]),
+    });
+
+    expect(state).toEqual({
+      provider: piAgentProvider,
+      promptEffort: "deep",
+      modelOptionsForDispatch: selections(["piAgentMode", "deep"]),
+    });
+  });
+
   it("returns descriptor defaults when no selections are provided", () => {
     const state = getComposerProviderState({
       provider: PROVIDER,
