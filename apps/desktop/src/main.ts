@@ -46,8 +46,11 @@ import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
 import * as PreviewBrowserSession from "./preview/BrowserSession.ts";
+import { installPreviewUserAgentFallback } from "./preview/PreviewBrowserIdentity.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
+
+installPreviewUserAgentFallback(Electron.app);
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {

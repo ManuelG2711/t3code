@@ -47,8 +47,8 @@ vi.mock("electron", () => ({
 const browserSessionLayer = Layer.succeed(
   BrowserSession.BrowserSession,
   BrowserSession.BrowserSession.of({
-    getPartition: () => Effect.succeed("persist:t3code-preview-test"),
-    isPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
+    getPartition: () => Effect.succeed("persist:t3code-preview-v2-test"),
+    isPartition: (partition) => partition.startsWith("persist:t3code-preview-v2-"),
     getSession: () => Effect.die("unexpected getSession"),
     clearCookies: () => Effect.void,
     clearCache: () => Effect.void,
@@ -58,11 +58,20 @@ const browserSessionLayer = Layer.succeed(
 const environmentLayer = Layer.succeed(
   DesktopEnvironment.DesktopEnvironment,
   DesktopEnvironment.DesktopEnvironment.of({
+    isPackaged: true,
+    isDevelopment: false,
+    appVersion: "0.0.27",
+    appPath: "/Applications/T3 Code.app",
+    appRoot: "/Applications/T3 Code.app/Contents/Resources/app.asar",
     browserArtifactsDir: "/tmp/t3/dev/browser-artifacts",
   } as DesktopEnvironment.DesktopEnvironmentShape),
 );
 
 const fileSystemLayer = FileSystem.layerNoop({
+  readFileString: (path) =>
+    Effect.succeed(
+      path.endsWith("package.json") ? '{"t3codeCommitHash":"abcdef1234567890"}' : "{}",
+    ),
   makeDirectory: (path) =>
     Effect.sync(() => {
       mkdir(path);
@@ -79,6 +88,8 @@ const layer = PreviewManager.layer.pipe(
   Layer.provideMerge(fileSystemLayer),
   Layer.provideMerge(Path.layer),
 );
+const PREVIEW_USER_AGENT =
+  "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.207 Safari/537.36";
 
 const withManager = <A>(
   use: (
@@ -128,6 +139,58 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("sanitizes the registered webview user agent", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const setUserAgent = vi.fn();
+        const sendCommand = vi.fn(async () => undefined);
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getUserAgent: () =>
+            "Mozilla/5.0 AppleWebKit/537.36 t3code/0.0.27 Chrome/140.0.7339.207 Electron/41.5.0 Safari/537.36",
+          setUserAgent,
+          getURL: () => "https://example.com",
+          getTitle: () => "Example",
+          isLoading: () => false,
+          isDevToolsOpened: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          on: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        } as never);
+
+        yield* manager.createTab("tab_1");
+        yield* manager.registerWebview("tab_1", 42);
+
+        expect(setUserAgent).toHaveBeenCalledWith(PREVIEW_USER_AGENT);
+        yield* Effect.yieldNow;
+        expect(sendCommand).toHaveBeenCalledWith(
+          "Network.setUserAgentOverride",
+          expect.objectContaining({
+            platform: "Win32",
+            userAgent: PREVIEW_USER_AGENT,
+            userAgentMetadata: expect.objectContaining({
+              brands: expect.arrayContaining([{ brand: "Google Chrome", version: "140" }]),
+            }),
+          }),
+        );
+      }),
+    ),
+  );
+
   effectIt.effect("captures a PNG screenshot into browser artifacts", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -138,6 +201,8 @@ describe("PreviewManager", () => {
           id: 42,
           isDestroyed: () => false,
           getType: () => "webview",
+          getUserAgent: () => "Mozilla/5.0 AppleWebKit/537.36 Chrome/140.0.7339.207 Safari/537.36",
+          setUserAgent: vi.fn(),
           getURL: () => "https://example.com:8443/path?query=value",
           getTitle: () => "Example",
           isLoading: () => false,
@@ -185,6 +250,117 @@ describe("PreviewManager", () => {
         expect(artifact.path).toMatch(
           /\/browser-artifacts\/browser-screenshot-example-com-[^.]+\.png$/,
         );
+      }),
+    ),
+  );
+
+  effectIt.effect("collects preview diagnostics from the registered webview", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let debuggerMessage:
+          | ((event: unknown, method: string, params: Record<string, unknown>) => void)
+          | undefined;
+        const guest = {
+          userAgent: PREVIEW_USER_AGENT,
+          appVersion: "5.0 Chrome/140.0.7339.207 Safari/537.36",
+          userAgentData: { brands: [{ brand: "Google Chrome", version: "140" }] },
+          highEntropyUserAgentData: { platform: "Windows" },
+          platform: "Win32",
+          vendor: "Google Inc.",
+          webdriver: false,
+          languages: ["en-US", "en"],
+          pluginsLength: 2,
+          mimeTypesLength: 2,
+          hasWindowChrome: true,
+          windowChromeKeys: ["runtime"],
+          hasProcess: false,
+          hasRequire: false,
+          hasBuffer: false,
+          serviceWorkerAvailable: true,
+          indexedDbAvailable: true,
+        };
+        const sendCommand = vi.fn(async (method: string) => {
+          if (method === "Runtime.evaluate") {
+            return { result: { value: guest } };
+          }
+          return undefined;
+        });
+        fromId.mockReturnValue({
+          id: 42,
+          session: {
+            partition: "persist:t3code-preview-v2-test",
+            getUserAgent: () => PREVIEW_USER_AGENT,
+          },
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getUserAgent: () => PREVIEW_USER_AGENT,
+          setUserAgent: vi.fn(),
+          getURL: () => "https://web.whatsapp.com/",
+          getTitle: () => "WhatsApp",
+          isLoading: () => false,
+          isDevToolsOpened: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          on: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn((_event: string, listener: typeof debuggerMessage) => {
+              debuggerMessage = listener;
+            }),
+            off: vi.fn(),
+          },
+        } as never);
+
+        yield* manager.createTab("tab_1");
+        yield* manager.registerWebview("tab_1", 42);
+        yield* Effect.yieldNow;
+        debuggerMessage?.({}, "Network.requestWillBeSent", {
+          requestId: "request-1",
+          type: "Document",
+          request: {
+            url: "https://web.whatsapp.com/",
+            method: "GET",
+            headers: {
+              "User-Agent": PREVIEW_USER_AGENT,
+              "sec-ch-ua": '"Google Chrome";v="140"',
+            },
+          },
+        });
+        yield* Effect.yieldNow;
+
+        const diagnostics = yield* manager.getDiagnostics("tab_1");
+
+        expect(diagnostics).toMatchObject({
+          app: {
+            isPackaged: true,
+            version: "0.0.27",
+            commitHash: "abcdef1234567890",
+            previewCompatibilityVersion: "preview-browser-identity-v1",
+          },
+          preview: {
+            tabId: "tab_1",
+            webContentsId: 42,
+            url: "https://web.whatsapp.com/",
+            partition: "persist:t3code-preview-v2-test",
+            sessionUserAgent: PREVIEW_USER_AGENT,
+            webContentsUserAgent: PREVIEW_USER_AGENT,
+            lastMainFrameRequest: {
+              url: "https://web.whatsapp.com/",
+              method: "GET",
+              headers: expect.objectContaining({
+                "User-Agent": PREVIEW_USER_AGENT,
+              }),
+            },
+          },
+          guest,
+        });
       }),
     ),
   );
@@ -253,6 +429,8 @@ describe("PreviewManager", () => {
           id: 42,
           isDestroyed: () => false,
           getType: () => "webview",
+          getUserAgent: () => "Mozilla/5.0 AppleWebKit/537.36 Chrome/140.0.7339.207 Safari/537.36",
+          setUserAgent: vi.fn(),
           getURL: () => "https://example.com",
           getTitle: () => "Example",
           isLoading: () => false,
@@ -328,6 +506,8 @@ describe("PreviewManager", () => {
           id: 42,
           isDestroyed: () => false,
           getType: () => "webview",
+          getUserAgent: () => "Mozilla/5.0 AppleWebKit/537.36 Chrome/140.0.7339.207 Safari/537.36",
+          setUserAgent: vi.fn(),
           getURL: () => "https://example.com",
           getTitle: () => "Example",
           isLoading: () => false,

@@ -19,6 +19,8 @@ interface Props {
   hasWebContents: boolean;
   /** Current zoom factor as a number (1.0 = 100%). */
   zoomFactor: number;
+  /** Copy the active preview tab's diagnostic payload to the system clipboard. */
+  onCopyDiagnostics?: (() => void) | undefined;
 }
 
 /**
@@ -26,7 +28,7 @@ interface Props {
  * controls, and storage-clearing actions. Only mounted by `PreviewView`
  * when the desktop bridge is present, so we can call it unconditionally.
  */
-export function PreviewMoreMenu({ tabId, hasWebContents, zoomFactor }: Props) {
+export function PreviewMoreMenu({ tabId, hasWebContents, zoomFactor, onCopyDiagnostics }: Props) {
   if (!previewBridge) return null;
   const bridge = previewBridge;
   const tabDisabled = !tabId || !hasWebContents;
@@ -58,6 +60,9 @@ export function PreviewMoreMenu({ tabId, hasWebContents, zoomFactor }: Props) {
         </MenuItem>
         <MenuItem onClick={callTab(bridge.openDevTools)} disabled={tabDisabled}>
           Open DevTools
+        </MenuItem>
+        <MenuItem onClick={onCopyDiagnostics} disabled={tabDisabled || !onCopyDiagnostics}>
+          Copy diagnostics
         </MenuItem>
         {/*
           Zoom row: label + inline control cluster. `closeOnClick=false`

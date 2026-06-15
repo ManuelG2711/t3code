@@ -8,6 +8,7 @@ import {
   DesktopPreviewAutomationTypeInputSchema,
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
+  DesktopPreviewDiagnosticsSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingSaveInputSchema,
@@ -150,6 +151,15 @@ export const openDevTools = tabMethod(
   "desktop.ipc.preview.openDevTools",
   (manager, tabId) => manager.openDevTools(tabId),
 );
+export const getDiagnostics = makeIpcMethod({
+  channel: IpcChannels.PREVIEW_GET_DIAGNOSTICS_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: DesktopPreviewDiagnosticsSchema,
+  handler: Effect.fn("desktop.ipc.preview.getDiagnostics")(function* ({ tabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.getDiagnostics(tabId);
+  }),
+});
 export const cancelPickElement = tabMethod(
   IpcChannels.PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL,
   "desktop.ipc.preview.cancelPickElement",
@@ -192,9 +202,10 @@ export const getPreviewConfig = makeIpcMethod({
   result: DesktopPreviewWebviewConfigSchema,
   handler: Effect.fn("desktop.ipc.preview.getConfig")(function* ({ environmentId }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.getBrowserSession(environmentId);
+    const browserSession = yield* manager.getBrowserSession(environmentId);
     return {
       partition: yield* manager.getBrowserPartition(environmentId),
+      userAgent: browserSession.getUserAgent(),
       webPreferences: PREVIEW_WEBVIEW_PREFERENCES,
       preloadUrl: pathToFileURL(`${__dirname}/preview-pick-preload.cjs`).href,
     };
@@ -354,6 +365,7 @@ export const methods = [
   resetZoom,
   hardReload,
   openDevTools,
+  getDiagnostics,
   clearCookies,
   clearCache,
   getPreviewConfig,

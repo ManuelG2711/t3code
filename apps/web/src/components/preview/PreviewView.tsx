@@ -20,6 +20,7 @@ import { formatPreviewUrl } from "./previewUrlPresentation";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu } from "./PreviewMoreMenu";
 import { PreviewUnreachable } from "./PreviewUnreachable";
+import { copyPreviewDiagnostics } from "./copyPreviewDiagnostics";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
 import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
@@ -147,6 +148,39 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
     if (!localApi || !url) return;
     void localApi.shell.openExternal(url).catch(() => undefined);
   }, [url]);
+
+  const handleCopyDiagnostics = useCallback(() => {
+    if (!previewBridge || !tabId) return;
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.writeText) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to copy diagnostics",
+        description: "Clipboard API unavailable.",
+      });
+      return;
+    }
+    void copyPreviewDiagnostics({
+      bridge: previewBridge,
+      tabId,
+      writeText: (text) => clipboard.writeText(text),
+    }).then(
+      () => {
+        toastManager.add({
+          type: "success",
+          title: "Preview diagnostics copied",
+          description: "Paste this JSON into the issue or chat for fingerprint debugging.",
+        });
+      },
+      (error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to copy diagnostics",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      },
+    );
+  }, [tabId]);
 
   const handleCapture = useCallback(
     (record: boolean) => {
@@ -531,6 +565,7 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
               tabId={tabId}
               hasWebContents={desktopOverlay !== null}
               zoomFactor={desktopOverlay?.zoomFactor ?? 1}
+              onCopyDiagnostics={tabId ? handleCopyDiagnostics : undefined}
             />
           ) : null
         }

@@ -6,6 +6,8 @@
  * here). Single layer-scoped browser session partition.
  */
 import type {
+  DesktopPreviewDiagnostics,
+  DesktopPreviewDiagnosticsRequest,
   DesktopPreviewAnnotationTheme,
   DesktopPreviewPointerEvent,
   PreviewAnnotationPayload,
@@ -63,6 +65,11 @@ import {
 } from "./GuestProtocol.ts";
 import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
 import { playwrightInjectedRuntimeInstallExpression } from "./PlaywrightInjectedRuntime.ts";
+import {
+  PREVIEW_BROWSER_IDENTITY_COMPATIBILITY_VERSION,
+  createPreviewUserAgentOverride,
+  normalizePreviewUserAgent,
+} from "./PreviewBrowserIdentity.ts";
 
 export type PreviewNavStatus =
   | { kind: "Idle" }
@@ -239,6 +246,38 @@ const nextZoomLevel = (current: number, direction: "in" | "out"): number => {
   return ZOOM_LEVELS[Math.max(step - 1, 0)] ?? current;
 };
 
+const stringifyHeaders = (headers: Readonly<Record<string, unknown>>): Record<string, string> => {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === "string") {
+      result[key] = value;
+    } else if (Array.isArray(value)) {
+      result[key] = value.map(String).join(", ");
+    } else if (value != null) {
+      result[key] = String(value);
+    }
+  }
+  return result;
+};
+
+const readPackageCommitHash = (
+  fileSystem: FileSystem.FileSystem,
+  packageJsonPath: string,
+): Effect.Effect<string | null> =>
+  fileSystem.readFileString(packageJsonPath).pipe(
+    Effect.map((raw) => {
+      try {
+        const parsed = JSON.parse(raw) as { readonly t3codeCommitHash?: unknown };
+        return typeof parsed.t3codeCommitHash === "string" && parsed.t3codeCommitHash.trim()
+          ? parsed.t3codeCommitHash.trim()
+          : null;
+      } catch {
+        return null;
+      }
+    }),
+    Effect.orElseSucceed(() => null),
+  );
+
 type Listener = (tabId: string, state: PreviewTabState) => void;
 type RecordingFrameListener = (frame: DesktopPreviewRecordingFrame) => void;
 
@@ -269,6 +308,7 @@ interface BrowserDiagnostics {
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly requests: ReadonlyMap<string, { url: string; method: string }>;
+  readonly lastMainFrameRequest: DesktopPreviewDiagnosticsRequest | null;
 }
 
 type PointerEventListener = (event: DesktopPreviewPointerEvent) => void;
@@ -333,14 +373,14 @@ const inputSignalsMatch = (left: PreviewInputSignal, right: PreviewInputSignal):
 };
 
 const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function* (
-  artifactDirectory: string,
+  environment: DesktopEnvironment.DesktopEnvironmentShape,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const parentScope = yield* Scope.Scope;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
-  const resolvedArtifactDirectory = path.resolve(artifactDirectory);
+  const resolvedArtifactDirectory = path.resolve(environment.browserArtifactsDir);
   const playwrightInstallExpression = yield* Effect.cached(
     playwrightInjectedRuntimeInstallExpression().pipe(
       Effect.mapError(
@@ -549,12 +589,28 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             typeof params["request"] === "object" && params["request"] !== null
               ? (params["request"] as Record<string, unknown>)
               : {};
+          const headers =
+            typeof request["headers"] === "object" && request["headers"] !== null
+              ? stringifyHeaders(request["headers"] as Record<string, unknown>)
+              : {};
+          const requestUrl = String(request["url"] ?? "");
+          const requestMethod = String(request["method"] ?? "GET");
+          const isMainFrame =
+            params["type"] === "Document" ||
+            (typeof params["frameId"] === "string" && params["frameId"] === params["loaderId"]);
           return {
             ...current,
+            lastMainFrameRequest: isMainFrame
+              ? {
+                  url: requestUrl,
+                  method: requestMethod,
+                  headers,
+                }
+              : current.lastMainFrameRequest,
             requests: replaceMap(current.requests, (copy) => {
               copy.set(requestId, {
-                url: String(request["url"] ?? ""),
-                method: String(request["method"] ?? "GET"),
+                url: requestUrl,
+                method: requestMethod,
               });
             }),
           };
@@ -649,17 +705,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           ),
         );
       }
-      if (wc.debugger.isAttached()) {
-        return Effect.fail(
-          fail(
-            "ensureControlSession",
-            automationError(
-              "PreviewAutomationExecutionError",
-              "Preview control cannot attach because another debugger owns this page.",
-            ),
-          ),
-        );
-      }
       const createControlSession = Effect.fn("PreviewManager.createControlSession")(function* () {
         const semaphore = yield* Semaphore.make(1);
         const scope = yield* Scope.fork(parentScope, "sequential");
@@ -731,12 +776,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 consoleEntries: [],
                 networkEntries: [],
                 requests: new Map(),
+                lastMainFrameRequest: null,
               });
             }),
           );
           yield* attempt("attachDebuggerListeners", () => {
             wc.debugger.on("message", onMessage);
-            wc.debugger.attach("1.3");
+            if (!wc.debugger.isAttached()) {
+              wc.debugger.attach("1.3");
+            }
           });
           yield* Effect.all(
             ["Runtime.enable", "Accessibility.enable", "Network.enable", "Log.enable"].map(
@@ -744,6 +792,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 attemptPromise("initializeDebugger", () => wc.debugger.sendCommand(method)),
             ),
             { concurrency: "unbounded", discard: true },
+          );
+          yield* attemptPromise("initializeDebugger.setUserAgentOverride", () =>
+            wc.debugger.sendCommand(
+              "Network.setUserAgentOverride",
+              createPreviewUserAgentOverride(wc.getUserAgent()),
+            ),
           );
           return [
             control,
@@ -1193,6 +1247,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         { concurrency: 3, discard: true },
       );
     }
+    yield* attempt("registerWebview.setUserAgent", () =>
+      wc.setUserAgent(normalizePreviewUserAgent(wc.getUserAgent())),
+    );
     yield* attachListeners(tabId, wc);
     runFork(ensureControlSession(wc).pipe(Effect.ignore));
     if (Math.abs(tab.zoomFactor - DEFAULT_ZOOM_FACTOR) > ZOOM_EPSILON) {
@@ -1509,6 +1566,104 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           title: wc.getTitle() || null,
           loading: wc.isLoading(),
         };
+  });
+
+  const getDiagnostics = Effect.fn("PreviewManager.getDiagnostics")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    return yield* withControlSession(tabId, wc, "diagnostics", (send) =>
+      Effect.gen(function* () {
+        const guest = yield* evaluateWithDebugger<DesktopPreviewDiagnostics["guest"]>(
+          send,
+          `(() => {
+            const chromeValue = globalThis.chrome;
+            const userAgentData = navigator.userAgentData ?? null;
+            const highEntropyHints = [
+              "architecture",
+              "bitness",
+              "brands",
+              "fullVersion",
+              "fullVersionList",
+              "mobile",
+              "model",
+              "platform",
+              "platformVersion",
+              "wow64"
+            ];
+            return Promise.resolve(
+              userAgentData?.getHighEntropyValues
+                ? userAgentData.getHighEntropyValues(highEntropyHints).catch((error) => ({
+                    error: String(error)
+                  }))
+                : null
+            ).then((highEntropyUserAgentData) => ({
+              userAgent: typeof navigator.userAgent === "string" ? navigator.userAgent : null,
+              appVersion: typeof navigator.appVersion === "string" ? navigator.appVersion : null,
+              userAgentData,
+              highEntropyUserAgentData,
+              platform: typeof navigator.platform === "string" ? navigator.platform : null,
+              vendor: typeof navigator.vendor === "string" ? navigator.vendor : null,
+              webdriver: typeof navigator.webdriver === "boolean" ? navigator.webdriver : null,
+              languages: Array.isArray(navigator.languages) ? Array.from(navigator.languages) : [],
+              pluginsLength: navigator.plugins ? navigator.plugins.length : null,
+              mimeTypesLength: navigator.mimeTypes ? navigator.mimeTypes.length : null,
+              hasWindowChrome: typeof chromeValue === "object" && chromeValue !== null,
+              windowChromeKeys: typeof chromeValue === "object" && chromeValue !== null ? Object.keys(chromeValue).sort() : [],
+              hasProcess: typeof globalThis.process !== "undefined",
+              hasRequire: typeof globalThis.require !== "undefined",
+              hasBuffer: typeof globalThis.Buffer !== "undefined",
+              serviceWorkerAvailable: "serviceWorker" in navigator,
+              indexedDbAvailable: "indexedDB" in globalThis
+            }));
+          })()`,
+          true,
+        );
+        const [createdAt, diagnostics, commitHash] = yield* Effect.all([
+          currentIso,
+          Ref.get(diagnosticsRef),
+          readPackageCommitHash(fileSystem, path.join(environment.appRoot, "package.json")),
+        ]);
+        const browserDiagnostics = diagnostics.get(wc.id);
+        const sessionLike = wc.session as
+          | {
+              readonly partition?: string;
+              readonly getUserAgent?: () => string;
+            }
+          | undefined;
+        const sessionUserAgent =
+          typeof sessionLike?.getUserAgent === "function" ? sessionLike.getUserAgent() : null;
+        return {
+          createdAt,
+          app: {
+            isPackaged: environment.isPackaged,
+            isDevelopment: environment.isDevelopment,
+            version: environment.appVersion,
+            appPath: environment.appPath,
+            appRoot: environment.appRoot,
+            commitHash,
+            previewCompatibilityVersion: PREVIEW_BROWSER_IDENTITY_COMPATIBILITY_VERSION,
+          },
+          runtime: {
+            electron: process.versions.electron ?? null,
+            chromium: process.versions.chrome ?? null,
+            node: process.versions.node ?? null,
+            platform: environment.platform,
+            arch: environment.processArch,
+          },
+          preview: {
+            tabId,
+            webContentsId: wc.id,
+            url: wc.getURL(),
+            title: wc.getTitle(),
+            loading: wc.isLoading(),
+            partition: sessionLike?.partition ?? null,
+            sessionUserAgent,
+            webContentsUserAgent: wc.getUserAgent(),
+            lastMainFrameRequest: browserDiagnostics?.lastMainFrameRequest ?? null,
+          },
+          guest,
+        } satisfies DesktopPreviewDiagnostics;
+      }),
+    );
   });
 
   const captureAutomationSnapshot = Effect.fn("PreviewManager.captureAutomationSnapshot")(
@@ -2093,6 +2248,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     createTab,
     goBack,
     goForward,
+    getDiagnostics,
     hardReload,
     navigate,
     openDevTools,
@@ -2176,6 +2332,9 @@ export interface PreviewManagerShape {
   readonly clearCookies: () => Effect.Effect<void, PreviewManagerError>;
   readonly clearCache: () => Effect.Effect<void, PreviewManagerError>;
   readonly getBrowserPartition: (scope?: string) => Effect.Effect<string, PreviewManagerError>;
+  readonly getDiagnostics: (
+    tabId: string,
+  ) => Effect.Effect<DesktopPreviewDiagnostics, PreviewManagerError>;
   readonly setAnnotationTheme: (
     theme: DesktopPreviewAnnotationTheme,
   ) => Effect.Effect<void, PreviewManagerError>;
@@ -2241,7 +2400,7 @@ export class PreviewManager extends Context.Service<PreviewManager, PreviewManag
 const make = Effect.gen(function* PreviewManagerMake() {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const browserSession = yield* BrowserSession.BrowserSession;
-  const operations = yield* makeNativeOperations(environment.browserArtifactsDir);
+  const operations = yield* makeNativeOperations(environment);
   const browserSessionEffect = <A>(
     operation: string,
     effect: Effect.Effect<A, BrowserSession.BrowserSessionError>,
@@ -2275,6 +2434,7 @@ const make = Effect.gen(function* PreviewManagerMake() {
     getBrowserPartition: Effect.fn("PreviewManager.getBrowserPartition")(function* (scope) {
       return yield* browserSessionEffect("getBrowserPartition", browserSession.getPartition(scope));
     }),
+    getDiagnostics: operations.getDiagnostics,
     setAnnotationTheme: operations.setAnnotationTheme,
     pickElement: operations.pickElement,
     cancelPickElement: operations.cancelPickElement,

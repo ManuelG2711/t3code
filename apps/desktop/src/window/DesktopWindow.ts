@@ -12,6 +12,10 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+import {
+  createPreviewUserAgentOverride,
+  normalizePreviewUserAgent,
+} from "../preview/PreviewBrowserIdentity.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
@@ -163,6 +167,25 @@ function bindFirstRevealTrigger(
   }
 }
 
+async function applyAttachedPreviewIdentity(
+  webContents: Electron.WebContents,
+  userAgent: string,
+): Promise<void> {
+  const normalizedUserAgent = normalizePreviewUserAgent(userAgent);
+  webContents.setUserAgent(normalizedUserAgent);
+  try {
+    if (!webContents.debugger.isAttached()) {
+      webContents.debugger.attach("1.3");
+    }
+    await webContents.debugger.sendCommand(
+      "Network.setUserAgentOverride",
+      createPreviewUserAgentOverride(normalizedUserAgent),
+    );
+  } catch {
+    // The session/header/webview UA fallbacks still apply if CDP is unavailable.
+  }
+}
+
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const assets = yield* DesktopAssets.DesktopAssets;
@@ -179,7 +202,8 @@ const make = Effect.gen(function* () {
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (
     backendHttpUrl: URL,
   ): Effect.fn.Return<Electron.BrowserWindow, DesktopWindowError> {
-    yield* previewManager.getBrowserSession();
+    const previewBrowserSession = yield* previewManager.getBrowserSession();
+    const previewUserAgent = normalizePreviewUserAgent(previewBrowserSession.getUserAgent());
     const applicationUrl = environment.isDevelopment
       ? yield* resolveDesktopDevServerUrl(environment)
       : backendHttpUrl.href;
@@ -219,6 +243,17 @@ const make = Effect.gen(function* () {
       webPreferences.nodeIntegration = false;
       webPreferences.nodeIntegrationInSubFrames = false;
       webPreferences.contextIsolation = false;
+      const webviewUserAgent = normalizePreviewUserAgent(
+        typeof params.useragent === "string" && params.useragent.length > 0
+          ? params.useragent
+          : previewUserAgent,
+      );
+      params.useragent = webviewUserAgent;
+      (webPreferences as typeof webPreferences & { userAgent: string }).userAgent =
+        webviewUserAgent;
+    });
+    window.webContents.on("did-attach-webview", (_event, attachedWebContents) => {
+      void applyAttachedPreviewIdentity(attachedWebContents, previewUserAgent);
     });
 
     window.webContents.on("context-menu", (event, params) => {

@@ -15,6 +15,7 @@ import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 interface ElectronWebview extends HTMLElement {
   src: string;
   partition: string;
+  useragent: string;
   preload?: string;
   webpreferences?: string;
   getWebContentsId: () => number;
@@ -34,6 +35,7 @@ export function HostedBrowserWebview(props: {
   const { threadRef, tabId, initialUrl } = props;
   const config = usePreviewWebviewConfig(threadRef.environmentId);
   const initialSrcRef = useRef(initialUrl ?? "about:blank");
+  const didNavigateInitialUrlRef = useRef(false);
   const webviewRef = useRef<ElectronWebview | null>(null);
   const presentation = useBrowserSurfaceStore(useShallow((state) => state.byTabId[tabId] ?? null));
   const recording = useBrowserRecordingStore((state) => state.activeTabId === tabId);
@@ -55,7 +57,17 @@ export function HostedBrowserWebview(props: {
       try {
         const webContentsId = webview.getWebContentsId();
         if (Number.isInteger(webContentsId) && webContentsId > 0) {
-          void bridge.registerWebview(tabId, webContentsId);
+          void bridge
+            .registerWebview(tabId, webContentsId)
+            .then(() => {
+              const initialSrc = initialSrcRef.current;
+              if (didNavigateInitialUrlRef.current || initialSrc === "about:blank") return;
+              didNavigateInitialUrlRef.current = true;
+              return bridge.navigate(tabId, initialSrc);
+            })
+            .catch(() => {
+              didNavigateInitialUrlRef.current = false;
+            });
         }
       } catch {
         // A later dom-ready will retry registration.
@@ -91,8 +103,9 @@ export function HostedBrowserWebview(props: {
   return (
     <webview
       ref={setWebviewRef}
-      src={initialSrcRef.current}
+      src="about:blank"
       partition={config.partition}
+      useragent={config.userAgent}
       webpreferences={config.webPreferences}
       {...(config.preloadUrl ? { preload: config.preloadUrl } : {})}
       data-preview-tab={tabId}

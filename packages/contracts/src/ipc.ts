@@ -520,6 +520,8 @@ export const DesktopPreviewPointerEventSchema: Schema.Codec<DesktopPreviewPointe
 export interface DesktopPreviewWebviewConfig {
   /** `persist:t3code-preview` (or whatever the desktop chose). */
   partition: string;
+  /** Browser-compatible user agent for preview guest pages. */
+  userAgent: string;
   /**
    * Canonical `<webview webpreferences="...">` string. Encodes the security
    * posture (sandboxed but contextIsolation off so the picker preload can
@@ -537,8 +539,123 @@ export interface DesktopPreviewWebviewConfig {
 export const DesktopPreviewWebviewConfigSchema: Schema.Codec<DesktopPreviewWebviewConfig> =
   Schema.Struct({
     partition: Schema.String,
+    userAgent: Schema.String,
     webPreferences: Schema.String,
     preloadUrl: Schema.NullOr(Schema.String),
+  });
+
+export interface DesktopPreviewDiagnosticsRequest {
+  url: string;
+  method: string;
+  headers: Readonly<Record<string, string>>;
+}
+
+export const DesktopPreviewDiagnosticsRequestSchema: Schema.Codec<DesktopPreviewDiagnosticsRequest> =
+  Schema.Struct({
+    url: Schema.String,
+    method: Schema.String,
+    headers: Schema.Record(Schema.String, Schema.String),
+  });
+
+export interface DesktopPreviewDiagnostics {
+  createdAt: string;
+  app: {
+    isPackaged: boolean;
+    isDevelopment: boolean;
+    version: string;
+    appPath: string;
+    appRoot: string;
+    commitHash: string | null;
+    previewCompatibilityVersion: string;
+  };
+  runtime: {
+    electron: string | null;
+    chromium: string | null;
+    node: string | null;
+    platform: string;
+    arch: string;
+  };
+  preview: {
+    tabId: string;
+    webContentsId: number;
+    url: string;
+    title: string;
+    loading: boolean;
+    partition: string | null;
+    sessionUserAgent: string | null;
+    webContentsUserAgent: string | null;
+    lastMainFrameRequest: DesktopPreviewDiagnosticsRequest | null;
+  };
+  guest: {
+    userAgent: string | null;
+    appVersion: string | null;
+    userAgentData: unknown;
+    highEntropyUserAgentData: unknown;
+    platform: string | null;
+    vendor: string | null;
+    webdriver: boolean | null;
+    languages: ReadonlyArray<string>;
+    pluginsLength: number | null;
+    mimeTypesLength: number | null;
+    hasWindowChrome: boolean;
+    windowChromeKeys: ReadonlyArray<string>;
+    hasProcess: boolean;
+    hasRequire: boolean;
+    hasBuffer: boolean;
+    serviceWorkerAvailable: boolean;
+    indexedDbAvailable: boolean;
+  };
+}
+
+export const DesktopPreviewDiagnosticsSchema: Schema.Codec<DesktopPreviewDiagnostics> =
+  Schema.Struct({
+    createdAt: Schema.String,
+    app: Schema.Struct({
+      isPackaged: Schema.Boolean,
+      isDevelopment: Schema.Boolean,
+      version: Schema.String,
+      appPath: Schema.String,
+      appRoot: Schema.String,
+      commitHash: Schema.NullOr(Schema.String),
+      previewCompatibilityVersion: Schema.String,
+    }),
+    runtime: Schema.Struct({
+      electron: Schema.NullOr(Schema.String),
+      chromium: Schema.NullOr(Schema.String),
+      node: Schema.NullOr(Schema.String),
+      platform: Schema.String,
+      arch: Schema.String,
+    }),
+    preview: Schema.Struct({
+      tabId: DesktopPreviewTabIdSchema,
+      webContentsId: Schema.Int,
+      url: Schema.String,
+      title: Schema.String,
+      loading: Schema.Boolean,
+      partition: Schema.NullOr(Schema.String),
+      sessionUserAgent: Schema.NullOr(Schema.String),
+      webContentsUserAgent: Schema.NullOr(Schema.String),
+      lastMainFrameRequest: Schema.NullOr(DesktopPreviewDiagnosticsRequestSchema),
+    }),
+    guest: Schema.Struct({
+      userAgent: Schema.NullOr(Schema.String),
+      appVersion: Schema.NullOr(Schema.String),
+      userAgentData: Schema.Unknown,
+      highEntropyUserAgentData: Schema.Unknown,
+      platform: Schema.NullOr(Schema.String),
+      vendor: Schema.NullOr(Schema.String),
+      webdriver: Schema.NullOr(Schema.Boolean),
+      languages: Schema.Array(Schema.String),
+      pluginsLength: Schema.NullOr(Schema.Number),
+      mimeTypesLength: Schema.NullOr(Schema.Number),
+      hasWindowChrome: Schema.Boolean,
+      windowChromeKeys: Schema.Array(Schema.String),
+      hasProcess: Schema.Boolean,
+      hasRequire: Schema.Boolean,
+      hasBuffer: Schema.Boolean,
+      serviceWorkerAvailable: Schema.Boolean,
+      indexedDbAvailable: Schema.Boolean,
+    }),
   });
 
 export interface DesktopPreviewAnnotationTheme {
@@ -970,6 +1087,8 @@ export interface DesktopPreviewBridge {
   hardReload: (tabId: string) => Promise<void>;
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
+  /** Collect app/runtime/browser fingerprint data for the active guest page. */
+  getDiagnostics: (tabId: string) => Promise<DesktopPreviewDiagnostics>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
   clearCookies: () => Promise<void>;
   /** Drop the HTTP cache for the preview partition (all tabs). */

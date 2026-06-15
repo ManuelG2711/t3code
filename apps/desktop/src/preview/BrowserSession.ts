@@ -8,7 +8,12 @@ import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
+import {
+  applyPreviewUserAgentHeaders,
+  normalizePreviewUserAgent,
+} from "./PreviewBrowserIdentity.ts";
+
+const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-v2-";
 
 export class BrowserSessionError extends Data.TaggedError("BrowserSessionError")<{
   readonly operation: string;
@@ -52,11 +57,13 @@ const make = Effect.gen(function* BrowserSessionMake() {
       return Effect.try({
         try: () => {
           const browserSession = session.fromPartition(partition);
-          const userAgent = browserSession
-            .getUserAgent()
-            .replace(/Electron\/[\d.]+ /, "")
-            .replace(/\s*t3code\/[\d.]+/, "");
+          const userAgent = normalizePreviewUserAgent(browserSession.getUserAgent());
           browserSession.setUserAgent(userAgent);
+          browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
+            callback({
+              requestHeaders: applyPreviewUserAgentHeaders(details.requestHeaders, userAgent),
+            });
+          });
           browserSession.setPermissionRequestHandler((_webContents, permission, callback) => {
             const allowed = ["clipboard-read", "clipboard-write", "notifications", "geolocation"];
             callback(allowed.includes(permission));
@@ -81,7 +88,14 @@ const make = Effect.gen(function* BrowserSessionMake() {
           Effect.tryPromise({
             try: () =>
               browserSession.clearStorageData({
-                storages: ["cookies", "localstorage", "indexdb", "websql", "serviceworkers"],
+                storages: [
+                  "cookies",
+                  "localstorage",
+                  "indexdb",
+                  "websql",
+                  "serviceworkers",
+                  "cachestorage",
+                ],
               }),
             catch: (cause) => new BrowserSessionError({ operation: "clearCookies", cause }),
           }),

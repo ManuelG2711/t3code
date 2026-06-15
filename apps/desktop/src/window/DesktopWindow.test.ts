@@ -6,16 +6,44 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import type * as Electron from "electron";
-import { vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 
-vi.mock("electron", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("electron")>()),
+vi.mock("electron", () => ({
+  app: {
+    focus: vi.fn(),
+  },
+  BrowserWindow: {
+    getAllWindows: vi.fn(() => []),
+    getFocusedWindow: vi.fn(() => null),
+  },
+  clipboard: {
+    writeText: vi.fn(),
+  },
+  Menu: {
+    buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })),
+    setApplicationMenu: vi.fn(),
+  },
+  nativeImage: {
+    createFromNamedImage: vi.fn(() => ({
+      isEmpty: () => true,
+      resize: vi.fn(() => ({ isEmpty: () => true })),
+    })),
+  },
+  nativeTheme: {
+    on: vi.fn(),
+    removeListener: vi.fn(),
+    shouldUseDarkColors: false,
+    themeSource: "system",
+  },
   session: {
     fromPartition: vi.fn(() => ({
       getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/1.2.3"),
       setPermissionRequestHandler: vi.fn(),
       setUserAgent: vi.fn(),
     })),
+  },
+  shell: {
+    openExternal: vi.fn(async () => undefined),
   },
 }));
 
@@ -30,6 +58,9 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+
+const PREVIEW_USER_AGENT =
+  "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.207 Safari/537.36";
 
 const environmentInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -134,6 +165,7 @@ function makeTestLayer(input: {
   readonly window: Electron.BrowserWindow;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
+  readonly browserUserAgent?: string;
   readonly openedExternalUrls?: unknown[];
 }) {
   const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
@@ -168,10 +200,15 @@ function makeTestLayer(input: {
         electronThemeLayer,
         electronWindowLayer,
         Layer.mock(PreviewManager.PreviewManager)({
-          getBrowserSession: () => Effect.succeed({} as Electron.Session),
+          getBrowserSession: () =>
+            Effect.succeed({
+              getUserAgent: () =>
+                input.browserUserAgent ??
+                "Mozilla/5.0 AppleWebKit/537.36 T3 Code (Alpha)/0.0.27 Chrome/140.0.7339.207 Electron/41.5.0 Safari/537.36",
+            } as Electron.Session),
           setMainWindow: () => Effect.void,
-          isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-"),
-          getBrowserPartition: () => Effect.succeed("persist:t3code-preview-test"),
+          isBrowserPartition: (partition) => partition.startsWith("persist:t3code-preview-v2-"),
+          getBrowserPartition: () => Effect.succeed("persist:t3code-preview-v2-test"),
         }),
       ),
     ),
@@ -258,6 +295,83 @@ describe("DesktopWindow", () => {
 
         assert.isTrue(prevented);
         assert.deepEqual(openedExternalUrls, ["https://accounts.microsoft.com/oauth"]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("sanitizes preview webview user agents before attach", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady;
+
+        const willAttachWebview = fakeWindow.webContentsListeners.get("will-attach-webview");
+        if (!willAttachWebview) {
+          return yield* Effect.die("will-attach-webview listener was not registered");
+        }
+        let prevented = false;
+        const webPreferences: Record<string, unknown> = {};
+        const params = {
+          partition: "persist:t3code-preview-v2-test",
+          useragent:
+            "Mozilla/5.0 AppleWebKit/537.36 T3 Code (Alpha)/0.0.27 Chrome/140.0.7339.207 Electron/41.5.0 Safari/537.36",
+        };
+
+        willAttachWebview(
+          {
+            preventDefault: () => {
+              prevented = true;
+            },
+          },
+          webPreferences,
+          params,
+        );
+
+        assert.isFalse(prevented);
+        assert.equal(params.useragent, PREVIEW_USER_AGENT);
+        assert.equal(webPreferences.userAgent, PREVIEW_USER_AGENT);
+        assert.equal(webPreferences.sandbox, true);
+        assert.equal(webPreferences.nodeIntegration, false);
+
+        const didAttachWebview = fakeWindow.webContentsListeners.get("did-attach-webview");
+        if (!didAttachWebview) {
+          return yield* Effect.die("did-attach-webview listener was not registered");
+        }
+        const sendCommand = vi.fn(async () => undefined);
+        const attachedWebContents = {
+          debugger: {
+            attach: vi.fn(),
+            isAttached: vi.fn(() => false),
+            sendCommand,
+          },
+          setUserAgent: vi.fn(),
+        };
+
+        didAttachWebview({}, attachedWebContents);
+        yield* Effect.promise(() => Promise.resolve());
+
+        assert.deepEqual(attachedWebContents.setUserAgent.mock.calls[0], [PREVIEW_USER_AGENT]);
+        assert.deepEqual(attachedWebContents.debugger.attach.mock.calls[0], ["1.3"]);
+        expect(sendCommand.mock.calls[0]).toEqual([
+          "Network.setUserAgentOverride",
+          {
+            acceptLanguage: "en-US,en;q=0.9",
+            platform: "Win32",
+            userAgent: PREVIEW_USER_AGENT,
+            userAgentMetadata: expect.objectContaining({
+              brands: expect.arrayContaining([{ brand: "Google Chrome", version: "140" }]),
+            }),
+          },
+        ]);
       }).pipe(Effect.provide(layer));
     }),
   );
