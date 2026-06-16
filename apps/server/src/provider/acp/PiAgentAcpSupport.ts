@@ -21,6 +21,12 @@ import {
 const PI_AGENT_DRIVER_KIND = ProviderDriverKind.make("piAgent");
 export const PI_AGENT_DEFAULT_MODEL = "default";
 export const PI_AGENT_MODE_OPTION_ID = "piAgentMode";
+export const PI_AGENT_CLIENT_CAPABILITIES = {
+  auth: { terminal: true },
+  fs: { readTextFile: false, writeTextFile: false },
+  terminal: false,
+  elicitation: { form: {} },
+} satisfies NonNullable<EffectAcpSchema.InitializeRequest["clientCapabilities"]>;
 
 type PiAgentAcpRuntimeSettings = Pick<PiAgentSettings, "binaryPath" | "launchArgs">;
 
@@ -109,11 +115,7 @@ export const makePiAgentAcpRuntime = (
         ...input,
         spawn: buildPiAgentAcpSpawnInput(input.piAgentSettings, input.cwd, input.environment),
         authMethodId: resolvePiAgentAuthMethodId,
-        clientCapabilities: {
-          auth: { terminal: true },
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-        },
+        clientCapabilities: PI_AGENT_CLIENT_CAPABILITIES,
       }).pipe(
         Layer.provide(
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),

@@ -6,6 +6,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import {
   applyPiAgentAcpModelSelection,
   buildPiAgentAcpSpawnInput,
+  PI_AGENT_CLIENT_CAPABILITIES,
   PI_AGENT_MODE_OPTION_ID,
   resolvePiAgentAuthMethodId,
   resolvePiAgentBaseModelId,
@@ -25,6 +26,15 @@ describe("splitPiAgentLaunchArgs", () => {
 });
 
 describe("buildPiAgentAcpSpawnInput", () => {
+  it("advertises form elicitation support for extension UI prompts", () => {
+    expect(PI_AGENT_CLIENT_CAPABILITIES).toMatchObject({
+      auth: { terminal: true },
+      fs: { readTextFile: false, writeTextFile: false },
+      terminal: false,
+      elicitation: { form: {} },
+    });
+  });
+
   it("uses pi-acp by default and preserves launch args", () => {
     expect(
       buildPiAgentAcpSpawnInput({ binaryPath: "npx", launchArgs: "-y pi-acp" }, "/tmp/project", {

@@ -3590,7 +3590,11 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
+    const supportsStandaloneInteractionModeSlashCommands =
+      providerStatuses.find((status) => status.instanceId === ctxSelectedModelSelection.instanceId)
+        ?.showInteractionModeToggle ?? true;
     const standaloneSlashCommand =
+      supportsStandaloneInteractionModeSlashCommands &&
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
