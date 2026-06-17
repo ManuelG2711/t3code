@@ -1290,6 +1290,42 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     }
 
     const baseBranch = yield* resolveBaseBranch(cwd, branch, details.upstreamRef, headContext);
+
+    // Mirror GitHub's own pre-flight check: how many commits does the head's
+    // remote-tracking branch have beyond the base on the remote? `null` means we
+    // could not determine it (don't block); `0` is exactly the state that makes
+    // `gh pr create` fail with "No commits between …".
+    const remoteCommitsAhead = details.upstreamRef
+      ? yield* gitCore.countRemoteHeadCommitsAheadOfBase(cwd, baseBranch, details.upstreamRef)
+      : null;
+
+    yield* Effect.logInfo("runPrStep: preparing change request").pipe(
+      Effect.annotateLogs({
+        cwd,
+        branch,
+        baseBranch,
+        headBranch: headContext.headBranch,
+        headSelector: headContext.preferredHeadSelector,
+        isCrossRepository: headContext.isCrossRepository,
+        upstreamRef: details.upstreamRef ?? "(none)",
+        localAheadCount: details.aheadCount,
+        remoteCommitsAhead: remoteCommitsAhead ?? "(unknown)",
+      }),
+    );
+
+    if (remoteCommitsAhead === 0) {
+      if (details.aheadCount > 0) {
+        return yield* gitManagerError(
+          "runPrStep",
+          `Branch "${branch}" has ${details.aheadCount} commit(s) that haven't reached "${details.upstreamRef}" on the remote. Push the branch before creating a ${terms.singular}.`,
+        );
+      }
+      return yield* gitManagerError(
+        "runPrStep",
+        `Branch "${branch}" has no commits ahead of "${baseBranch}" on the remote, so there is nothing to open a ${terms.singular} for. Are you on the base branch, or were these commits already merged into "${baseBranch}"?`,
+      );
+    }
+
     yield* emit({
       kind: "phase_started",
       phase: "pr",

@@ -1168,6 +1168,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
   });
 
+  const countRemoteHeadCommitsAheadOfBase: GitVcsDriver.GitVcsDriverShape["countRemoteHeadCommitsAheadOfBase"] =
+    Effect.fn("countRemoteHeadCommitsAheadOfBase")(function* (cwd, baseBranch, headUpstreamRef) {
+      const headRef = headUpstreamRef.trim();
+      if (headRef.length === 0) {
+        return null;
+      }
+      const remoteNames = yield* listRemoteNames(cwd).pipe(Effect.orElseSucceed(() => []));
+      const parsedHead = parseRemoteRefWithRemoteNames(headRef, remoteNames);
+      const remoteName = parsedHead?.remoteName ?? "origin";
+      // Compare against the remote-tracking base ref when it exists so the count
+      // matches what GitHub sees; fall back to the local base branch otherwise.
+      const remoteBaseExists = yield* remoteBranchExists(cwd, remoteName, baseBranch).pipe(
+        Effect.orElseSucceed(() => false),
+      );
+      const baseRef = remoteBaseExists ? `${remoteName}/${baseBranch}` : baseBranch;
+      const result = yield* executeGit(
+        "GitVcsDriver.countRemoteHeadCommitsAheadOfBase",
+        cwd,
+        ["rev-list", "--count", `${baseRef}..${headRef}`],
+        { allowNonZeroExit: true },
+      );
+      if (result.exitCode !== 0) {
+        return null;
+      }
+      const parsed = Number.parseInt(result.stdout.trim(), 10);
+      return Number.isFinite(parsed) ? Math.max(0, parsed) : null;
+    });
+
   const readStatusDetailsRemote = Effect.fn("readStatusDetailsRemote")(function* (cwd: string) {
     const branchResult = yield* executeGit(
       "GitVcsDriver.statusDetailsRemote.branch",
@@ -2404,6 +2432,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     pushCurrentBranch,
     pullCurrentBranch,
     readRangeContext,
+    countRemoteHeadCommitsAheadOfBase,
     getReviewDiffPreview,
     readConfigValue,
     listRefs,

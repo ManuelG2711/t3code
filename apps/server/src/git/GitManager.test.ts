@@ -1804,6 +1804,36 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect(
+    "create_pr fails clearly when the branch has no commits ahead of base on the remote",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        // Publish main so the remote-tracking base ref exists.
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        // A branch with no new commits, pushed so it has an upstream that points
+        // at the same remote tip as main (the "No commits between" condition).
+        yield* runGit(repoDir, ["checkout", "-b", "feature/no-commits"]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "feature/no-commits"]);
+
+        const { manager, ghCalls } = yield* makeManager();
+        const errorMessage = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+        }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        );
+
+        expect(errorMessage).toContain('no commits ahead of "main"');
+        // The doomed `gh pr create` must never be issued.
+        expect(ghCalls.some((call) => call.includes("pr create"))).toBe(false);
+      }),
+  );
+
   it.effect("create_pr falls back to main when source control provider detection fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

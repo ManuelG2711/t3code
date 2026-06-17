@@ -195,6 +195,17 @@ export interface GitVcsDriverShape {
     cwd: string,
     baseRef: string,
   ) => Effect.Effect<GitRangeContext, GitCommandError>;
+  /**
+   * Count commits the head's remote-tracking branch (`headUpstreamRef`, e.g.
+   * `origin/feature`) has beyond `baseBranch` on the remote — mirroring the
+   * comparison GitHub performs when opening a PR. Returns `null` when it cannot
+   * be determined (so callers can treat that as "don't block").
+   */
+  readonly countRemoteHeadCommitsAheadOfBase: (
+    cwd: string,
+    baseBranch: string,
+    headUpstreamRef: string,
+  ) => Effect.Effect<number | null, GitCommandError>;
   readonly getReviewDiffPreview: (
     input: ReviewDiffPreviewInput,
   ) => Effect.Effect<ReviewDiffPreviewResult, GitCommandError>;
