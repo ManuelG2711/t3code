@@ -400,6 +400,7 @@ describe("ProviderCommandReactor", () => {
         title: "Thread",
         modelSelection: modelSelection,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        kind: "agent",
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,

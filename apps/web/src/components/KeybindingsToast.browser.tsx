@@ -205,6 +205,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5",
         },
+        kind: "agent",
         interactionMode: "default",
         runtimeMode: "full-access",
         branch: "main",

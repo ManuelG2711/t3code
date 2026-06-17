@@ -44,6 +44,7 @@ const BASE_THREAD: OrchestrationThread = {
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
   interactionMode: "default",
+  kind: "agent",
   branch: null,
   worktreePath: null,
   latestTurn: null,

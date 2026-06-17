@@ -28,6 +28,7 @@ const stubThread = {
   projectId: ProjectId.make("project-1"),
   title: "Test Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  kind: "agent" as const,
   runtimeMode: "full-access" as const,
   interactionMode: "default" as const,
   branch: null,

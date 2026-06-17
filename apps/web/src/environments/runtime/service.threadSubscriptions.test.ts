@@ -215,6 +215,7 @@ function makeThreadShellSnapshot(params: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
         },
+        kind: "agent",
         runtimeMode: "full-access",
         interactionMode: "default",
         branch: null,

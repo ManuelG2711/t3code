@@ -41,6 +41,7 @@ export function buildLocalDraftThread(
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
+    kind: "agent",
     session: null,
     messages: [],
     error,

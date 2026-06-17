@@ -83,6 +83,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           model: "claude-opus-4-6",
         },
+        kind: "agent",
         runtimeMode: "full-access",
         interactionMode: "default",
         branch: null,
